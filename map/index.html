@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Clean Planet Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --green: #3a9e6e; --green-light: #e8f7f0;
+    --red: #e04a4a; --amber: #e09c2a; --purple: #7c6fd4; --blue: #3a82d4;
+    --gray: #f4f4f2; --text: #1a1a1a; --text-muted: #888; --radius: 14px;
+  }
+  html, body { height: 100%; width: 100%; overflow: hidden; font-family: -apple-system, sans-serif; background: #e8ede6; }
+  #map { position: fixed; inset: 0; z-index: 0; }
+
+  /* LOADING */
+  #loading {
+    position: fixed; inset: 0; z-index: 999; background: #1a2e1a;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+  }
+  #loading .emoji { font-size: 52px; animation: pulse 1.5s infinite; }
+  #loading p { color: rgba(255,255,255,0.8); font-size: 16px; font-weight: 500; }
+  #loading small { color: rgba(255,255,255,0.45); font-size: 13px; text-align: center; padding: 0 40px; }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.12)} }
+
+  /* TOP BAR */
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(255,255,255,0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    padding: env(safe-area-inset-top, 12px) 16px 10px;
+    border-bottom: 1px solid rgba(0,0,0,0.07);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  #topbar h1 { font-size: 17px; font-weight: 700; color: var(--text); white-space: nowrap; }
+  #pin-count { font-size: 13px; font-weight: 600; color: var(--green); background: var(--green-light); padding: 4px 10px; border-radius: 20px; white-space: nowrap; }
+  #sync-status { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+
+  /* AUTH BUTTON */
+  #auth-btn {
+    flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 20px; border: 1.5px solid rgba(0,0,0,0.12);
+    background: white; font-family: -apple-system, sans-serif; font-size: 13px;
+    font-weight: 600; color: var(--text); cursor: pointer; transition: all 0.15s;
+    white-space: nowrap;
+  }
+  #auth-btn:active { opacity: 0.7; }
+  #auth-btn.signed-in { border-color: var(--green); color: var(--green); }
+
+  /* TYPE BAR */
+  #type-bar {
+    position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 88px); left: 12px; right: 12px; z-index: 100;
+    display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none;
+  }
+  #type-bar::-webkit-scrollbar { display: none; }
+  .type-btn {
+    flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+    padding: 9px 14px; border-radius: 24px; border: 2px solid transparent;
+    background: rgba(255,255,255,0.9); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    font-family: -apple-system, sans-serif; font-size: 13px; font-weight: 500; color: var(--text);
+    cursor: pointer; box-shadow: 0 2px 10px rgba(0,0,0,0.1); transition: all 0.18s;
+  }
+  .type-btn .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .type-btn.active { background: white; box-shadow: 0 2px 14px rgba(0,0,0,0.18); }
+  .type-btn.active[data-type="trash"]   { border-color: var(--red); color: var(--red); }
+  .type-btn.active[data-type="plastic"] { border-color: var(--amber); color: #b87c1a; }
+  .type-btn.active[data-type="illegal"] { border-color: var(--purple); color: var(--purple); }
+  .type-btn.active[data-type="clean"]   { border-color: var(--green); color: var(--green); }
+
+  /* BOTTOM BAR */
+  #bottom-bar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(255,255,255,0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    padding: 10px 16px env(safe-area-inset-bottom, 12px);
+    border-top: 1px solid rgba(0,0,0,0.07);
+    display: flex; gap: 10px;
+  }
+  .action-btn {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 13px; border-radius: var(--radius); border: none; cursor: pointer;
+    font-family: -apple-system, sans-serif; font-size: 14px; font-weight: 600; transition: all 0.15s;
+  }
+  .action-btn:active { transform: scale(0.97); }
+  #btn-gps { background: var(--blue); color: white; }
+  #btn-stats { background: var(--green-light); color: var(--green); max-width: 52px; font-size: 18px; }
+  #btn-clear { background: var(--gray); color: var(--text-muted); max-width: 52px; }
+
+  /* TOAST */
+  #toast {
+    position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 155px); left: 50%; transform: translateX(-50%);
+    background: rgba(30,30,30,0.88); color: white;
+    font-size: 13px; font-weight: 500; padding: 9px 18px; border-radius: 24px;
+    z-index: 200; white-space: nowrap; opacity: 0; transition: opacity 0.25s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+
+  /* HINT */
+  #hint {
+    position: fixed; top: calc(env(safe-area-inset-top, 44px) + 56px); left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.65); color: white;
+    font-size: 13px; font-weight: 500; padding: 7px 16px; border-radius: 20px;
+    z-index: 100; white-space: nowrap; pointer-events: none; opacity: 1; transition: opacity 0.5s;
+  }
+
+  /* PIN LABEL */
+  .pin-wrapper { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .pin-label {
+    background: rgba(255,255,255,0.95); border-radius: 6px; padding: 2px 6px;
+    font-size: 10px; font-weight: 600; white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.18); line-height: 1.4; pointer-events: none;
+  }
+
+  /* PHOTO MODAL */
+  #photo-modal {
+    position: fixed; inset: 0; z-index: 500;
+    background: rgba(0,0,0,0.5);
+    display: none; align-items: center; justify-content: center; padding: 20px;
+  }
+  #photo-modal.open { display: flex; }
+  .modal-box {
+    background: white; border-radius: 20px; padding: 24px;
+    width: 100%; max-width: 340px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .modal-box h2 { font-size: 17px; font-weight: 700; color: var(--text); }
+  .modal-box p { font-size: 13px; color: var(--text-muted); }
+  #photo-preview {
+    width: 100%; height: 180px; border-radius: 12px;
+    object-fit: cover; display: none; background: var(--gray);
+  }
+  #photo-placeholder {
+    width: 100%; height: 180px; border-radius: 12px;
+    background: var(--gray); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 8px; cursor: pointer;
+    border: 2px dashed #ccc;
+  }
+  #photo-placeholder span { font-size: 32px; }
+  #photo-placeholder p { font-size: 13px; color: var(--text-muted); margin: 0; }
+  #photo-input { display: none; }
+  .modal-actions { display: flex; gap: 10px; }
+  .modal-btn {
+    flex: 1; padding: 13px; border-radius: var(--radius); border: none;
+    font-family: -apple-system, sans-serif; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .modal-btn.primary { background: var(--green); color: white; }
+  .modal-btn.secondary { background: var(--gray); color: var(--text-muted); }
+  .modal-btn:disabled { opacity: 0.5; pointer-events: none; }
+
+  /* POPUP PHOTO */
+  .popup-photo { width: 100%; border-radius: 8px; margin-bottom: 8px; cursor: pointer; }
+  .leaflet-popup-content-wrapper { border-radius: 12px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.15) !important; }
+  .leaflet-popup-content { font-size: 14px; min-width: 180px; max-width: 220px; font-family: -apple-system, sans-serif; }
+  .popup-label { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+  .popup-coords { font-size: 11px; color: #999; margin-bottom: 4px; }
+  .popup-date { font-size: 11px; color: #aaa; margin-bottom: 4px; }
+  .popup-author { font-size: 11px; color: #3a9e6e; margin-bottom: 8px; font-weight: 600; }
+  .popup-del { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--red); background: none; border: none; cursor: pointer; padding: 0; font-weight: 600; }
+
+  /* AUTH MODAL */
+  #auth-modal {
+    position: fixed; inset: 0; z-index: 600;
+    background: rgba(0,0,0,0.55);
+    display: none; align-items: flex-end; justify-content: center; padding: 20px;
+  }
+  #auth-modal.open { display: flex; }
+  .auth-box {
+    background: white; border-radius: 24px 24px 20px 20px; padding: 28px 24px 32px;
+    width: 100%; max-width: 380px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .auth-box h2 { font-size: 20px; font-weight: 700; color: var(--text); text-align: center; }
+  .auth-box .auth-sub { font-size: 13px; color: var(--text-muted); text-align: center; line-height: 1.5; }
+  .auth-tabs { display: flex; background: var(--gray); border-radius: 10px; padding: 3px; gap: 3px; }
+  .auth-tab {
+    flex: 1; padding: 8px; border-radius: 8px; border: none; background: transparent;
+    font-family: -apple-system, sans-serif; font-size: 14px; font-weight: 600;
+    color: var(--text-muted); cursor: pointer; transition: all 0.18s;
+  }
+  .auth-tab.active { background: white; color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+  .auth-field {
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .auth-field label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .auth-field input {
+    padding: 13px 14px; border-radius: var(--radius); border: 1.5px solid rgba(0,0,0,0.12);
+    font-family: -apple-system, sans-serif; font-size: 15px; color: var(--text);
+    background: white; outline: none; transition: border-color 0.15s;
+    -webkit-appearance: none; appearance: none;
+  }
+  .auth-field input:focus { border-color: var(--green); }
+  .auth-name-row { display: flex; gap: 8px; }
+  .auth-name-row .auth-field { flex: 1; }
+  .auth-submit {
+    padding: 14px; border-radius: var(--radius); border: none;
+    background: var(--green); color: white;
+    font-family: -apple-system, sans-serif; font-size: 15px; font-weight: 700;
+    cursor: pointer; transition: opacity 0.15s;
+  }
+  .auth-submit:active { opacity: 0.85; }
+  .auth-submit:disabled { opacity: 0.5; pointer-events: none; }
+  .auth-error { font-size: 13px; color: var(--red); text-align: center; display: none; }
+  .auth-success { font-size: 13px; color: var(--green); text-align: center; display: none; line-height: 1.5; }
+  #btn-auth-close {
+    align-self: center; background: none; border: none; font-size: 13px;
+    color: var(--text-muted); cursor: pointer; padding: 4px 0; font-family: -apple-system, sans-serif;
+  }
+  .auth-forgot {
+    align-self: flex-end; background: none; border: none; font-size: 12px;
+    color: var(--text-muted); cursor: pointer; font-family: -apple-system, sans-serif;
+    text-decoration: underline; padding: 0;
+  }
+
+  /* STATS MODAL */
+  #stats-modal {
+    position: fixed; inset: 0; z-index: 600;
+    background: rgba(0,0,0,0.55);
+    display: none; align-items: flex-end; justify-content: center; padding: 20px;
+  }
+  #stats-modal.open { display: flex; }
+  .stats-box {
+    background: white; border-radius: 24px 24px 20px 20px; padding: 28px 24px 32px;
+    width: 100%; max-width: 380px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .stats-box h2 { font-size: 20px; font-weight: 700; color: var(--text); text-align: center; }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat-card {
+    background: var(--gray); border-radius: 14px; padding: 16px 14px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-card .stat-num { font-size: 28px; font-weight: 800; color: var(--text); line-height: 1; }
+  .stat-card .stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .stat-card.green { background: var(--green-light); }
+  .stat-card.green .stat-num { color: var(--green); }
+  .stats-user { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--gray); border-radius: 14px; }
+  .stats-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--green); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; overflow: hidden; }
+  .stats-avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .stats-user-info { flex: 1; min-width: 0; }
+  .stats-user-name { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stats-user-email { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stats-type-list { display: flex; flex-direction: column; gap: 8px; }
+  .stats-type-row { display: flex; align-items: center; gap: 10px; }
+  .stats-type-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .stats-type-label { flex: 1; font-size: 13px; color: var(--text); }
+  .stats-type-count { font-size: 13px; font-weight: 700; color: var(--text); }
+  #btn-signout {
+    padding: 13px; border-radius: var(--radius); border: 1.5px solid rgba(224,74,74,0.3);
+    background: white; color: var(--red); font-family: -apple-system, sans-serif;
+    font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+  }
+  #btn-stats-close {
+    align-self: center; background: none; border: none; font-size: 13px;
+    color: var(--text-muted); cursor: pointer; padding: 4px 0; font-family: -apple-system, sans-serif;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="emoji">🌍</div>
+  <p id="loading-text">Connecting to database…</p>
+  <small>Shared map — all users see the same pins in real time</small>
+</div>
+
+<div id="topbar">
+  <h1>🌍 Clean Planet</h1>
+  <span id="sync-status">🟡 connecting</span>
+  <div id="pin-count">0 pins</div>
+  <button id="auth-btn" onclick="onAuthBtnClick()">👤 Sign in</button>
+</div>
+
+<div id="map"></div>
+<div id="hint">👆 Tap the map to pin garbage</div>
+
+<div id="type-bar">
+  <button class="type-btn active" data-type="trash" onclick="setType(this,'#e04a4a')">
+    <div class="dot" style="background:#e04a4a"></div> Garbage pile
+  </button>
+  <button class="type-btn" data-type="plastic" onclick="setType(this,'#e09c2a')">
+    <div class="dot" style="background:#e09c2a"></div> Plastic litter
+  </button>
+  <button class="type-btn" data-type="illegal" onclick="setType(this,'#7c6fd4')">
+    <div class="dot" style="background:#7c6fd4"></div> Illegal dump
+  </button>
+  <button class="type-btn" data-type="clean" onclick="setType(this,'#3a9e6e')">
+    <div class="dot" style="background:#3a9e6e"></div> Cleaned up ✓
+  </button>
+</div>
+
+<div id="bottom-bar">
+  <button class="action-btn" id="btn-gps" onclick="goToMe()">📍 Go to my location</button>
+  <button class="action-btn" id="btn-stats" onclick="openStats()" title="My stats">📊</button>
+  <button class="action-btn" id="btn-clear" onclick="clearAll()">🗑</button>
+</div>
+
+<div id="toast"></div>
+
+<!-- PHOTO MODAL -->
+<div id="photo-modal">
+  <div class="modal-box">
+    <h2>📸 Add a photo</h2>
+    <p>Take or choose a photo of the garbage spot. It will be compressed automatically.</p>
+    <div id="photo-placeholder" onclick="document.getElementById('photo-input').click()">
+      <span>📷</span>
+      <p>Tap to take or choose photo</p>
+    </div>
+    <img id="photo-preview" alt="Preview"/>
+    <input type="file" id="photo-input" accept="image/*" capture="environment"/>
+    <div class="modal-actions">
+      <button class="modal-btn secondary" onclick="closeModal(false)">Skip photo</button>
+      <button class="modal-btn primary" id="btn-save-pin" onclick="closeModal(true)">Save pin</button>
+    </div>
+  </div>
+</div>
+
+<!-- AUTH MODAL -->
+<div id="auth-modal">
+  <div class="auth-box">
+    <h2>🌱 Join Clean Planet</h2>
+    <p class="auth-sub">Track your contribution — see how many pins you've added and where.</p>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-signin" onclick="switchTab('signin')">Sign in</button>
+      <button class="auth-tab" id="tab-signup" onclick="switchTab('signup')">Register</button>
+    </div>
+
+    <!-- SIGN IN -->
+    <div id="form-signin">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="auth-field">
+          <label>Email</label>
+          <input type="email" id="si-email" placeholder="your@email.com" autocomplete="email"/>
+        </div>
+        <div class="auth-field">
+          <label>Password</label>
+          <input type="password" id="si-password" placeholder="••••••••" autocomplete="current-password"/>
+        </div>
+        <button class="auth-forgot" onclick="forgotPassword()">Forgot password?</button>
+        <div class="auth-error" id="si-error"></div>
+        <button class="auth-submit" id="si-btn" onclick="doSignIn()">Sign in</button>
+      </div>
+    </div>
+
+    <!-- SIGN UP -->
+    <div id="form-signup" style="display:none">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="auth-name-row">
+          <div class="auth-field">
+            <label>First name</label>
+            <input type="text" id="su-firstname" placeholder="Jonas" autocomplete="given-name"/>
+          </div>
+          <div class="auth-field">
+            <label>Last name</label>
+            <input type="text" id="su-lastname" placeholder="Jonaitis" autocomplete="family-name"/>
+          </div>
+        </div>
+        <div class="auth-field">
+          <label>Email</label>
+          <input type="email" id="su-email" placeholder="your@email.com" autocomplete="email"/>
+        </div>
+        <div class="auth-field">
+          <label>Password (min. 6 characters)</label>
+          <input type="password" id="su-password" placeholder="••••••••" autocomplete="new-password"/>
+        </div>
+        <div class="auth-error" id="su-error"></div>
+        <div class="auth-success" id="su-success">✅ Almost done! Check your inbox and click the confirmation link, then sign in.</div>
+        <button class="auth-submit" id="su-btn" onclick="doSignUp()">Create account</button>
+      </div>
+    </div>
+
+    <button id="btn-auth-close" onclick="closeAuthModal()">Maybe later</button>
+  </div>
+</div>
+
+<!-- STATS MODAL -->
+<div id="stats-modal">
+  <div class="stats-box">
+    <h2>📊 My Activity</h2>
+    <div class="stats-user" id="stats-user-row">
+      <div class="stats-avatar" id="stats-avatar">👤</div>
+      <div class="stats-user-info">
+        <div class="stats-user-name" id="stats-name">—</div>
+        <div class="stats-user-email" id="stats-email">—</div>
+      </div>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card green">
+        <div class="stat-num" id="stat-total">0</div>
+        <div class="stat-label">Pins added total</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num" id="stat-today">0</div>
+        <div class="stat-label">Added today</div>
+      </div>
+    </div>
+    <div class="stats-type-list" id="stats-type-list"></div>
+    <button id="btn-signout" onclick="signOut()">Sign out</button>
+    <button id="btn-stats-close" onclick="closeStatsModal()">Close</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  var SUPABASE_URL = 'https://tbvbinrohiozcmehlxlm.supabase.co';
+  var SUPABASE_KEY = 'sb_publishable_-ligSO21ia3ywRbPukk87A_wKe9pMcB';
+  var db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  var currentType = 'trash', currentColor = '#e04a4a';
+  var markers = {};
+  var map, userMarker, accCircle, hintHidden = false;
+  var pendingLat = null, pendingLng = null, pendingPhotoBlob = null;
+  var currentUser = null;
+
+  var typeLabels = { trash:'Garbage pile', plastic:'Plastic litter', illegal:'Illegal dump', clean:'Cleaned up' };
+  var typeColors = { trash:'#e04a4a', plastic:'#e09c2a', illegal:'#7c6fd4', clean:'#3a9e6e' };
+
+  /* ── TOAST ── */
+  function toast(msg, ms) {
+    var t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    setTimeout(function(){ t.classList.remove('show'); }, ms || 2500);
+  }
+
+  function hideHint() {
+    if (!hintHidden) { document.getElementById('hint').style.opacity = '0'; hintHidden = true; }
+  }
+
+  function updateCount() {
+    var c = Object.keys(markers).length;
+    document.getElementById('pin-count').textContent = c===0?'0 pins':c===1?'1 pin':c+' pins';
+  }
+
+  function setType(btn, color) {
+    currentType = btn.getAttribute('data-type'); currentColor = color;
+    document.querySelectorAll('.type-btn').forEach(function(b){ b.classList.remove('active'); });
+    btn.classList.add('active');
+  }
+
+  function setSyncStatus(s) {
+    var el = document.getElementById('sync-status');
+    el.textContent = s==='live'?'🟢 live':s==='saving'?'🟡 saving…':'🔴 offline';
+  }
+
+  function formatDate(iso) {
+    var d = new Date(iso);
+    return d.getDate()+'.'+(d.getMonth()+1)+' '+d.getHours()+':'+('0'+d.getMinutes()).slice(-2);
+  }
+
+  function formatDateFull(iso) { return new Date(iso).toLocaleString(); }
+
+  /* ── AUTH ── */
+  db.auth.onAuthStateChange(function(event, session) {
+    currentUser = session ? session.user : null;
+    updateAuthUI();
+    if (event === 'SIGNED_IN') {
+      var name = currentUser.user_metadata.full_name || currentUser.user_metadata.name || currentUser.email || 'You';
+      toast('✅ Welcome, ' + name.split(' ')[0] + '!');
+      closeAuthModal();
+    }
+    if (event === 'SIGNED_OUT') { toast('Signed out'); }
+  });
+
+  function updateAuthUI() {
+    var btn = document.getElementById('auth-btn');
+    if (currentUser) {
+      var name = currentUser.user_metadata.full_name || currentUser.user_metadata.name || currentUser.email || 'You';
+      btn.textContent = '✅ ' + name.split(' ')[0];
+      btn.classList.add('signed-in');
+    } else {
+      btn.textContent = '👤 Sign in';
+      btn.classList.remove('signed-in');
+    }
+  }
+
+  function onAuthBtnClick() { currentUser ? openStats() : openAuthModal(); }
+
+  function switchTab(tab) {
+    var isSignIn = tab === 'signin';
+    document.getElementById('tab-signin').classList.toggle('active', isSignIn);
+    document.getElementById('tab-signup').classList.toggle('active', !isSignIn);
+    document.getElementById('form-signin').style.display = isSignIn ? '' : 'none';
+    document.getElementById('form-signup').style.display = isSignIn ? 'none' : '';
+    document.getElementById('si-error').style.display = 'none';
+    document.getElementById('su-error').style.display = 'none';
+    document.getElementById('su-success').style.display = 'none';
+  }
+
+  function showAuthError(id, msg) {
+    var el = document.getElementById(id);
+    el.textContent = msg; el.style.display = 'block';
+  }
+
+  async function doSignIn() {
+    var email = document.getElementById('si-email').value.trim();
+    var password = document.getElementById('si-password').value;
+    var btn = document.getElementById('si-btn');
+    if (!email || !password) { showAuthError('si-error', 'Please fill in all fields'); return; }
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    document.getElementById('si-error').style.display = 'none';
+    var res = await db.auth.signInWithPassword({ email: email, password: password });
+    btn.disabled = false; btn.textContent = 'Sign in';
+    if (res.error) {
+      var msg = res.error.message;
+      if (msg.includes('Invalid login')) msg = 'Wrong email or password';
+      if (msg.includes('Email not confirmed')) msg = 'Please confirm your email first — check your inbox';
+      showAuthError('si-error', msg);
+    }
+  }
+
+  async function doSignUp() {
+    var first = document.getElementById('su-firstname').value.trim();
+    var last = document.getElementById('su-lastname').value.trim();
+    var email = document.getElementById('su-email').value.trim();
+    var password = document.getElementById('su-password').value;
+    var btn = document.getElementById('su-btn');
+    if (!first || !email || !password) { showAuthError('su-error', 'Please fill in all required fields'); return; }
+    if (password.length < 6) { showAuthError('su-error', 'Password must be at least 6 characters'); return; }
+    btn.disabled = true; btn.textContent = 'Creating account…';
+    document.getElementById('su-error').style.display = 'none';
+    var fullName = (first + (last ? ' ' + last : '')).trim();
+    var res = await db.auth.signUp({
+      email: email, password: password,
+      options: {
+        data: { full_name: fullName, name: fullName },
+        emailRedirectTo: 'https://cleanplanet.lt/'
+      }
+    });
+    btn.disabled = false; btn.textContent = 'Create account';
+    if (res.error) {
+      var msg = res.error.message;
+      if (msg.includes('already registered')) msg = 'This email is already registered — try signing in';
+      showAuthError('su-error', msg);
+    } else {
+      document.getElementById('su-success').style.display = 'block';
+      btn.style.display = 'none';
+    }
+  }
+
+  async function forgotPassword() {
+    var email = document.getElementById('si-email').value.trim();
+    if (!email) { showAuthError('si-error', 'Enter your email above first'); return; }
+    var res = await db.auth.resetPasswordForEmail(email, { redirectTo: 'https://cleanplanet.lt/' });
+    if (res.error) { showAuthError('si-error', res.error.message); }
+    else { document.getElementById('si-error').style.display='none'; toast('✉️ Password reset link sent to ' + email, 4000); }
+  }
+
+  async function signOut() { await db.auth.signOut(); closeStatsModal(); }
+
+  function openAuthModal() {
+    switchTab('signin');
+    document.getElementById('auth-modal').classList.add('open');
+  }
+  function closeAuthModal() { document.getElementById('auth-modal').classList.remove('open'); }
+  window.closeAuthModal = closeAuthModal;
+
+  /* ── STATS ── */
+  async function openStats() {
+    if (!currentUser) { openAuthModal(); return; }
+    document.getElementById('stats-modal').classList.add('open');
+
+    // Fill user info
+    var meta = currentUser.user_metadata;
+    document.getElementById('stats-name').textContent = meta.full_name || meta.name || 'Anonymous';
+    document.getElementById('stats-email').textContent = currentUser.email || '';
+    var avatar = document.getElementById('stats-avatar');
+    if (meta.avatar_url || meta.picture) {
+      avatar.innerHTML = '<img src="'+(meta.avatar_url||meta.picture)+'" alt="avatar"/>';
+    } else {
+      avatar.textContent = '👤';
+    }
+
+    // Load pin stats
+    var res = await db.from('pins').select('type, date').eq('user_id', currentUser.id);
+    if (res.error || !res.data) return;
+
+    var total = res.data.length;
+    var todayStr = new Date().toDateString();
+    var todayCount = res.data.filter(function(p){ return new Date(p.date).toDateString() === todayStr; }).length;
+
+    document.getElementById('stat-total').textContent = total;
+    document.getElementById('stat-today').textContent = todayCount;
+
+    // Type breakdown
+    var counts = {};
+    res.data.forEach(function(p){ counts[p.type] = (counts[p.type]||0) + 1; });
+    var list = document.getElementById('stats-type-list');
+    list.innerHTML = '';
+    Object.keys(typeLabels).forEach(function(t) {
+      if (!counts[t]) return;
+      var row = document.createElement('div');
+      row.className = 'stats-type-row';
+      row.innerHTML = '<div class="stats-type-dot" style="background:'+typeColors[t]+'"></div>'
+        + '<div class="stats-type-label">'+typeLabels[t]+'</div>'
+        + '<div class="stats-type-count">'+counts[t]+'</div>';
+      list.appendChild(row);
+    });
+    if (list.innerHTML === '') list.innerHTML = '<div style="font-size:13px;color:var(--text-muted);text-align:center">No pins yet — tap the map to add your first!</div>';
+  }
+
+  function closeStatsModal() { document.getElementById('stats-modal').classList.remove('open'); }
+  window.closeStatsModal = closeStatsModal;
+
+  /* ── IMAGE COMPRESSION ── */
+  var MAX_PHOTO_BYTES = 500 * 1024;
+
+  function compressImage(file, callback) {
+    if (!file.type.startsWith('image/')) {
+      toast('Only image files are allowed'); callback(null); return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var canvas = document.createElement('canvas');
+        var MAX = 800;
+        var w = img.width, h = img.height;
+        if (w > h) { if (w > MAX) { h = h*(MAX/w); w = MAX; } }
+        else { if (h > MAX) { w = w*(MAX/h); h = MAX; } }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        canvas.toBlob(function(blob) {
+          if (blob.size > MAX_PHOTO_BYTES) {
+            canvas.toBlob(function(blob2) { callback(blob2); }, 'image/jpeg', 0.4);
+          } else {
+            callback(blob);
+          }
+        }, 'image/jpeg', 0.75);
+      };
+      img.onerror = function() { toast('Invalid image file'); callback(null); };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  /* ── GET USER IP ── */
+  async function getUserIP() {
+    try {
+      var res = await fetch('https://api.ipify.org?format=json');
+      var data = await res.json();
+      return data.ip || 'unknown';
+    } catch(e) { return 'unknown'; }
+  }
+
+  /* ── PHOTO MODAL ── */
+  function openModal(lat, lng) {
+    pendingLat = lat; pendingLng = lng; pendingPhotoBlob = null;
+    document.getElementById('photo-preview').style.display = 'none';
+    document.getElementById('photo-placeholder').style.display = 'flex';
+    document.getElementById('photo-input').value = '';
+    document.getElementById('photo-modal').classList.add('open');
+  }
+
+  function closeModal(save) {
+    document.getElementById('photo-modal').classList.remove('open');
+    if (save) { savePin(pendingLat, pendingLng, currentType, pendingPhotoBlob); }
+    pendingLat = null; pendingLng = null; pendingPhotoBlob = null;
+  }
+  window.closeModal = closeModal;
+
+  document.getElementById('photo-input').addEventListener('change', function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast('Only image files allowed'); return;
+    }
+    compressImage(file, function(blob) {
+      if (!blob) return;
+      pendingPhotoBlob = blob;
+      var url = URL.createObjectURL(blob);
+      var preview = document.getElementById('photo-preview');
+      preview.src = url; preview.style.display = 'block';
+      document.getElementById('photo-placeholder').style.display = 'none';
+      var kb = Math.round(blob.size / 1024);
+      toast('Photo ready — ' + kb + ' KB');
+    });
+  });
+
+  /* ── RENDER PIN ── */
+  function makePinIcon(color, dateStr) {
+    var pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">'
+      + '<path d="M16 1C8.82 1 3 6.82 3 14c0 10 13 27 13 27s13-17 13-27C29 6.82 23.18 1 16 1z" fill="' + color + '" stroke="white" stroke-width="2"/>'
+      + '<circle cx="16" cy="14" r="6" fill="white" fill-opacity="0.9"/></svg>';
+    var label = '<div class="pin-label" style="color:'+color+';border:1.5px solid '+color+'">'+formatDate(dateStr)+'</div>';
+    return L.divIcon({ html:'<div class="pin-wrapper">'+label+pinSvg+'</div>', iconSize:[90,62], iconAnchor:[45,62], popupAnchor:[0,-64], className:'' });
+  }
+
+  function makeUserIcon() {
+    return L.divIcon({
+      html:'<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="9" fill="#3a82d4" stroke="white" stroke-width="3"/><circle cx="11" cy="11" r="3.5" fill="white"/></svg>',
+      iconSize:[22,22], iconAnchor:[11,11], className:''
+    });
+  }
+
+  function renderPin(pin) {
+    if (markers[pin.id]) return;
+    var color = typeColors[pin.type] || '#e04a4a';
+    var marker = L.marker([pin.lat, pin.lng], { icon: makePinIcon(color, pin.date) }).addTo(map);
+    var photoHtml = pin.photo_url
+      ? '<img class="popup-photo" src="'+pin.photo_url+'" alt="Garbage photo" onclick="window.open(\''+pin.photo_url+'\',\'_blank\')" />'
+      : '';
+    var authorHtml = pin.user_name ? '<div class="popup-author">👤 ' + pin.user_name + '</div>' : '';
+    marker.bindPopup(
+      photoHtml
+      + '<div class="popup-label">'+(typeLabels[pin.type]||pin.type)+'</div>'
+      + '<div class="popup-coords">'+parseFloat(pin.lat).toFixed(5)+', '+parseFloat(pin.lng).toFixed(5)+'</div>'
+      + '<div class="popup-date">🕐 '+formatDateFull(pin.date)+'</div>'
+      + authorHtml
+      + '<button class="popup-del" onclick="deletePin(\''+pin.id+'\')">✕ Remove</button>'
+    );
+    markers[pin.id] = marker;
+    updateCount(); hideHint();
+  }
+
+  function unrenderPin(id) {
+    if (markers[id]) { map.removeLayer(markers[id]); delete markers[id]; updateCount(); map.closePopup(); }
+  }
+
+  /* ── SUPABASE LOAD & REALTIME ── */
+  async function loadAllPins() {
+    var res = await db.from('pins').select('*');
+    if (!res.error) res.data.forEach(renderPin);
+  }
+
+  async function deletePin(id) {
+    var pwd = prompt('Enter admin password to delete:');
+    if (!pwd) return;
+    setSyncStatus('saving'); map.closePopup();
+    var res = await db.rpc('delete_pin', { pin_id: id, password: pwd });
+    if (res.error) {
+      toast('Could not remove pin'); setSyncStatus('offline');
+    } else if (res.data === true) {
+      toast('Pin removed'); setSyncStatus('live');
+    } else {
+      toast('Wrong password'); setSyncStatus('live');
+    }
+  }
+  window.deletePin = deletePin;
+
+  async function clearAll() {
+    var count = Object.keys(markers).length;
+    if (!count) return;
+    var pwd = prompt('Enter admin password to clear all pins:');
+    if (!pwd) return;
+    if (!confirm('Remove all ' + count + ' pin(s) for everyone?')) return;
+    setSyncStatus('saving');
+    var ids = Object.keys(markers);
+    var allOk = true;
+    for (var i = 0; i < ids.length; i++) {
+      var res = await db.rpc('delete_pin', { pin_id: ids[i], password: pwd });
+      if (res.error || res.data !== true) { allOk = false; break; }
+    }
+    if (allOk) { toast('All pins cleared'); setSyncStatus('live'); }
+    else { toast('Wrong password or error'); setSyncStatus('live'); }
+  }
+
+  var pollingTimer = null;
+
+  async function pollPins() {
+    var res = await db.from('pins').select('*');
+    if (res.error) return;
+    var dbIds = res.data.map(function(p){ return p.id; });
+    res.data.forEach(function(p){ if (!markers[p.id]) { renderPin(p); toast('📍 New pin added!'); } });
+    Object.keys(markers).forEach(function(id){ if (dbIds.indexOf(id)===-1) unrenderPin(id); });
+  }
+
+  function subscribeRealtime() {
+    db.channel('pins-changes')
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'pins' }, function(p) {
+        renderPin(p.new); toast('📍 New pin added!');
+      })
+      .on('postgres_changes', { event:'DELETE', schema:'public', table:'pins' }, function(p) {
+        unrenderPin(p.old.id);
+      })
+      .subscribe(function(s) {
+        if (s==='SUBSCRIBED') {
+          setSyncStatus('live');
+          if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; }
+        } else if (s==='CLOSED'||s==='CHANNEL_ERROR') {
+          setSyncStatus('offline');
+          if (!pollingTimer) pollingTimer = setInterval(pollPins, 10000);
+        }
+      });
+    pollingTimer = setInterval(pollPins, 15000);
+  }
+
+  /* ── SUPABASE SAVE (with user_id) ── */
+  async function savePin(lat, lng, type, photoBlob) {
+    setSyncStatus('saving');
+    var id = Date.now() + '-' + Math.floor(Math.random()*100000);
+    var photoUrl = null;
+
+    if (photoBlob) {
+      if (photoBlob.size > MAX_PHOTO_BYTES) {
+        toast('Photo too large, saving pin without photo');
+      } else {
+        var fileName = 'photos/' + id + '.jpg';
+        var uploadRes = await db.storage.from('garbege pictures').upload(fileName, photoBlob, { contentType: 'image/jpeg' });
+        if (uploadRes.error) {
+          toast('Photo upload failed, saving pin without photo');
+        } else {
+          photoUrl = db.storage.from('garbege pictures').getPublicUrl(fileName).data.publicUrl;
+        }
+      }
+    }
+
+    var ip = await getUserIP();
+
+    // Build extra fields for user attribution
+    var userId = currentUser ? currentUser.id : null;
+    var userName = currentUser
+      ? (currentUser.user_metadata.full_name || currentUser.user_metadata.name || currentUser.email || null)
+      : null;
+
+    var res = await db.rpc('insert_pin_safe', {
+      p_id: id, p_lat: lat, p_lng: lng,
+      p_type: type, p_date: new Date().toISOString(),
+      p_photo_url: photoUrl, p_ip: ip,
+      p_user_id: userId, p_user_name: userName
+    });
+
+    if (res.error) {
+      toast('Could not save pin — try again'); setSyncStatus('offline');
+    } else if (res.data && res.data.error === 'limit_reached') {
+      toast('You have added too many pins today (max 10). Try again tomorrow!', 4000);
+      setSyncStatus('live');
+    } else {
+      setSyncStatus('live');
+      if (currentUser) toast('📍 Pin saved! Check your stats 📊');
+      else toast('📍 Saved! Sign in to track your contributions');
+    }
+  }
+
+  /* ── GPS ── */
+  function placeUserDot(ll, acc) {
+    if (userMarker) map.removeLayer(userMarker);
+    if (accCircle) map.removeLayer(accCircle);
+    accCircle = L.circle(ll, { radius:acc, color:'#3a82d4', fillColor:'#3a82d4', fillOpacity:0.08, weight:1.5 }).addTo(map);
+    userMarker = L.marker(ll, { icon:makeUserIcon(), zIndexOffset:999 }).addTo(map);
+    userMarker.bindPopup('<b>You are here</b><br><small>±'+Math.round(acc)+' m</small>');
+  }
+
+  function goToMe() {
+    if (location.protocol !== 'https:') { toast('⚠️ GPS needs HTTPS — enable SSL on geodezija.lt', 4000); return; }
+    if (!navigator.geolocation) { toast('GPS not available'); return; }
+    var btn = document.getElementById('btn-gps');
+    btn.textContent = '⏳ Locating…';
+    navigator.geolocation.getCurrentPosition(
+      function(pos) {
+        btn.textContent = '📍 Go to my location';
+        var ll = L.latLng(pos.coords.latitude, pos.coords.longitude);
+        placeUserDot(ll, pos.coords.accuracy);
+        map.setView(ll, 17);
+      },
+      function(err) { btn.textContent = '📍 Go to my location'; if(err.code===1) toast('Location denied — check Safari Settings'); else toast('Could not get location'); },
+      { enableHighAccuracy:true, timeout:12000, maximumAge:0 }
+    );
+  }
+
+  /* ── INIT ── */
+  map = L.map('map', { zoomControl:false }).setView([54.6872, 25.2797], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap', maxZoom:19 }).addTo(map);
+  L.control.zoom({ position:'topright' }).addTo(map);
+
+  map.on('click', function(e) { openModal(e.latlng.lat, e.latlng.lng); });
+
+  // Check existing session on load
+  db.auth.getSession().then(function(r) {
+    if (r.data && r.data.session) {
+      currentUser = r.data.session.user;
+      updateAuthUI();
+    }
+  });
+
+  function autoLocate() {
+    if (!navigator.geolocation) {
+      document.getElementById('loading').style.display = 'none';
+      loadAllPins(); subscribeRealtime(); return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      function(pos) {
+        var ll = L.latLng(pos.coords.latitude, pos.coords.longitude);
+        placeUserDot(ll, pos.coords.accuracy);
+        map.setView(ll, 16);
+        document.getElementById('loading-text').textContent = 'Loading pins…';
+        loadAllPins().then(function() {
+          document.getElementById('loading').style.display = 'none';
+          toast('🌍 '+Object.keys(markers).length+' shared pins loaded');
+        });
+        subscribeRealtime();
+      },
+      function() {
+        document.getElementById('loading').style.display = 'none';
+        loadAllPins(); subscribeRealtime();
+        toast('Location denied — tap 📍 to locate');
+      },
+      { enableHighAccuracy:true, timeout:12000, maximumAge:0 }
+    );
+  }
+
+  autoLocate();
+</script>
+</body>
+</html>
